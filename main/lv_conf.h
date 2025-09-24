@@ -101,7 +101,7 @@
  *(Not so important, you can adjust it to modify default sizes and spaces)*/
 //#define LV_DPI_DEF 142     /*[px/inch]*/
 //#define LV_DPI_DEF 190
-#define LV_DPI_DEF 143
+#define LV_DPI_DEF 190
 /*=================
  * OPERATING SYSTEM
  *=================*/
@@ -617,7 +617,8 @@
 
 /*Always set a default font*/
 //#define LV_FONT_DEFAULT &lv_font_montserrat_8
-#define LV_FONT_DEFAULT &lv_font_montserrat_10
+//#define LV_FONT_DEFAULT &lv_font_montserrat_10
+#define LV_FONT_DEFAULT &lv_font_montserrat_12
 
 /*Enable handling large font and/or fonts with a lot of characters.
  *The limit depends on the font size, font face and bpp.
