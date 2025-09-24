@@ -45,17 +45,6 @@
 //---------
 
 //-----------------------------------------------------------
-#if LV_TICK_SOURCE == LV_TICK_SOURCE_TASK
-/* LVGL Timer TASK Method block */
-#    define USE_MUTEX               1
-#    define USE_FREERTOS_TASK_NOTIF 2
-#    define LV_TASK_NOTIFY_SIGNAL   0x01
-////#define LV_TIMER_TASK_METHOD USE_MUTEX
-#    define LV_TIMER_TASK_METHOD (USE_FREERTOS_TASK_NOTIF)  // Chose here
-#    if (LV_TIMER_TASK_METHOD == 2)
-#        define FPS_DIVIDER 1  // options: 1 max fps, 2 max fps/2 , 3 ,max/3 etcc
-#    endif                     /* #if (LV_TIMER_TASK_METHOD == 2) */
-#endif                         /* #if  LV_TICK_SOURCE == LV_TICK_SOURCE_TASK */
 //---------
 
 //-----------------------------------------------------------
@@ -191,8 +180,8 @@ void lv_disp_flush(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
 #endif /* #ifdef (flush_ready_in_disp_flush) */
 }
 //---------
-//############  GLOBALE LVGL ##########//
-lv_obj_t* tabview  = NULL;
+// ############  GLOBALE LVGL ##########//
+lv_obj_t* tabview = NULL;
 
 void lvgl_ui_function(void) {
     // Creăm containerul de taburi
@@ -287,67 +276,13 @@ void s_lvgl_unlock(void) {
 }
 
 // -------------------------------
-#if LV_TICK_SOURCE == LV_TICK_SOURCE_TASK && (LV_TIMER_TASK_METHOD == USE_MUTEX)
-
-SemaphoreHandle_t lvgl_timer_mutex;
-
-bool lv_timer_sem_init() {
-    ESP_LOGI("LVGL", "Se creaza LVGL mutex!");
-    lvgl_timer_mutex = xSemaphoreCreateMutex();
-    if (lvgl_timer_mutex == NULL) {
-        ESP_LOGE("LVGL", "Eroare: Mutex-ul LVGL nu a fost creat!");
-        return 0;
-    }
-    return (lvgl_timer_mutex != NULL);
-}
-
-bool lv_timer_sem_take(void) {
-    return (xSemaphoreTake(lvgl_timer_mutex, portMAX_DELAY) == pdTRUE);
-}
-
-bool lv_timer_sem_give(void) {
-    return (xSemaphoreGive(lvgl_timer_mutex) == pdTRUE);
-}
-#endif /* #if LV_TICK_SOURCE == LV_TICK_SOURCE_TASK && (LV_TIMER_TASK_METHOD == USE_MUTEX) */
-// -------------------------------
-
-#ifdef LVGL_BENCH_TEST
-/********************************************** */
-/*                   TASK                       */
-/********************************************** */
-void lv_bench_task(void* parameter) {
-    static TickType_t tick = 0;
-    tick                   = xTaskGetTickCount();
-    g_log_last_tick        = lv_tick_get();
-    while (true) {
-        // --- log la 1s, din task (NU din ISR) ---
-        uint32_t now = lv_tick_get();
-        if (now - g_log_last_tick >= 1000 && g_flush_count) {
-            double avg_us   = (double) g_flush_total_us / (double) g_flush_count;        // medii
-            double fps_avg  = 1e6 / avg_us;                                              // medii
-            double fps_inst = g_flush_last_us ? (1e6 / (double) g_flush_last_us) : 0.0;  // medii
-
-            // MB/s (atenție: dacă nu randezi full-screen, asta e pe “ultima zonă”)
-            double mbps_inst = g_flush_last_us
-                                   ? ((double) g_flush_bytes / (1024.0 * 1024.0)) / ((double) g_flush_last_us / 1e6)
-                                   : 0.0;
-
-            ESP_LOGI("STATS", "flush last=%.2f ms | avg=%.2f ms | FPS(inst)=%.1f | FPS(avg)=%.1f | MB/s(inst)=%.2f", g_flush_last_us / 1000.0, avg_us / 1000.0, fps_inst, fps_avg, mbps_inst);
-
-            g_log_last_tick = now;
-        }
-        // ----------------------------------------
-        vTaskDelayUntil(&tick, pdMS_TO_TICKS(100));
-    }
-}
-#endif /* #ifdef LVGL_BENCH_TEST */
 
 /************************************************** */
 
 #if LV_TICK_SOURCE == LV_TICK_SOURCE_TIMER
 
 static void lv_tick_timer_callback_func(void* arg) {
-    lv_tick_inc((TICK_INCREMENTATION));  // 5 ms ticklv_timer_handler();
+    lv_tick_inc((TICK_INCREMENTATION));
 }
 
 static void lv_tick_start_timer(void) {
@@ -359,7 +294,7 @@ static void lv_tick_start_timer(void) {
     esp_timer_handle_t tick_timer;
 
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &tick_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, LV_TIMER_INCREMENT));  // 1000 us = 1 ms
+    ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, LV_TIMER_INCREMENT));
 }
 
 void lv_main_task(void* parameter) {
@@ -369,7 +304,6 @@ void lv_main_task(void* parameter) {
     while (true) {
         if (s_lvgl_lock(portMAX_DELAY)) {
             lv_timer_handler();
-            // xTaskGenericNotifyFromISR(xHandle_lv_main_task, tskDEFAULT_INDEX_TO_NOTIFY, 0x01, eSetBits);
         }
         vTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));
     }
@@ -377,58 +311,15 @@ void lv_main_task(void* parameter) {
 
 #elif LV_TICK_SOURCE == LV_TICK_SOURCE_TASK
 
-#    if (LV_TIMER_TASK_METHOD == USE_MUTEX)
-
-/********************************************** */
-/*                   TASK                       */
-/********************************************** */
-void lv_main_tick_task(void* parameter) {
-    static TickType_t tick = 0;
-    tick                   = xTaskGetTickCount();  // Inițializare corectă
-    while (true) {
-        if (lv_timer_sem_take())  // Protejeaza accesul la LVGL
-        {
-            lv_tick_inc(TICK_INCREMENTATION);  // Incrementeaza tick-urile la fiecare 5ms
-            lv_timer_sem_give();
-        }
-        vTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));  // Delay precis mult mai rapid asa
-    }
-}
-
-void lv_main_task(void* parameter) {
-    xHandle_lv_main_task   = xTaskGetCurrentTaskHandle();
-    static TickType_t tick = 0;
-    tick                   = xTaskGetTickCount();  // Inițializare corectă
-    while (true) {
-        if (s_lvgl_lock(portMAX_DELAY)) {
-            if (lv_timer_sem_take()) {
-                lv_timer_handler();   /* let the GUI do its work */
-                lv_timer_sem_give();  // Eliberam mutex-ul
-            }
-            s_lvgl_unlock();
-        }
-        vTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));  // Delay precis mult mai rapid asa
-    }
-}
-
-#    elif (LV_TIMER_TASK_METHOD == USE_FREERTOS_TASK_NOTIF)
-
 /********************************************** */
 /*                   TASK                       */
 /********************************************** */
 void lv_main_tick_task(void* parameter) {
     static TickType_t tick = 0;
     tick                   = xTaskGetTickCount();
-    uint8_t fps_divider    = 0;
     while (true) {
         lv_tick_inc(TICK_INCREMENTATION);  // Incrementeaza tick-urile LVGL
-        fps_divider++;
-        if (fps_divider >= FPS_DIVIDER) {
-            fps_divider = 0;
-            xTaskNotify(xHandle_lv_main_task, LV_TASK_NOTIFY_SIGNAL,
-                eSetBits);  // Notifica task-ul principal
-        }
-        xTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));  // Delay precis mult mai rapid asa
+        xTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY)); // Delay precis mult mai rapid asa
     }
 }
 
@@ -440,25 +331,15 @@ void lv_main_task(void* parameter) {
     static TickType_t tick = 0;
     tick                   = xTaskGetTickCount();  // Inițializare corectă
     while (true) {
-        uint32_t   notificationValue;
-        BaseType_t notified = xTaskNotifyWait(
-            0x00,       // nu ignoră nimic
-            ULONG_MAX,  // curăță toate biturile
-            &notificationValue,
-            portMAX_DELAY  // așteaptă cât trebuie
-        );
-        if (notified == pdTRUE && (notificationValue & LV_TASK_NOTIFY_SIGNAL)) {
-            if (s_lvgl_lock(portMAX_DELAY)) {  // <— ADD
-                lv_timer_handler();
-                s_lvgl_unlock();  // <— ADD
-            }
+        if (s_lvgl_lock(portMAX_DELAY)) {
+            lv_timer_handler();
+            s_lvgl_unlock();
         }
-        ////vTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY_NO_OOP));  // delay doar aici
+        xTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));  // delay doar aici
     }
 }
 
-#    endif  // (LV_TIMER_TASK_METHOD == USE_FREERTOS_TASK_NOTIF)
-#endif      /* #if LV_TICK_SOURCE == LV_TICK_SOURCE_TIMER */
+#endif /* #if LV_TICK_SOURCE == LV_TICK_SOURCE_TIMER */
 
 /********************************************** */
 /*                   TASK                       */
@@ -483,7 +364,7 @@ void chechButton0State(void* parameter) {
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         //.intr_type    = GPIO_INTR_ANYEDGE, // si la apasare si la eliberare
-        .intr_type    = GPIO_INTR_NEGEDGE, // doar la apasare
+        .intr_type = GPIO_INTR_NEGEDGE,  // doar la apasare
         //.intr_type    = GPIO_INTR_POSEDGE, // doar la eliberare
     };
     gpio_config(&io_conf);
@@ -494,7 +375,7 @@ void chechButton0State(void* parameter) {
     static uint8_t current_tab = 0;
 
     while (true) {
-        xTaskNotifyWait(0x00, 0xFFFFFFFF, &notificationValue, portMAX_DELAY);
+        xTaskNotifyWait(0x00, 0xFFFFFFFF, &notificationValue, portMAX_DELAY); // asteapta notificarea din ISR
         if (notificationValue & 0x01) {
             ESP_LOGW("BUTTON", "Button ACTIVAT pe GPIO0");
 
@@ -503,7 +384,7 @@ void chechButton0State(void* parameter) {
                 current_tab = 0;
 
             // schimbă tab-ul LVGL
-            if (s_lvgl_lock(50)) {  // protejează LVGL cu mutex-ul tău
+            if (s_lvgl_lock(30)) {  // protejează LVGL cu mutex-ul tău
                 lv_tabview_set_act(tabview, current_tab, LV_ANIM_ON);
                 s_lvgl_unlock();
             }
@@ -691,16 +572,11 @@ extern "C" void app_main(void) {
 
     vTaskDelay(500);
 
-#if (LV_TICK_SOURCE == LV_TICK_SOURCE_TASK) && (LV_TIMER_TASK_METHOD == USE_MUTEX)
-    lv_timer_sem_init();
-#endif  // (LV_TIMER_TASK_METHOD == USE_MUTEX)
     s_lvgl_port_init_locking();
     esp_rom_delay_us(100);
     s_lvgl_lock(0);
-
     // lvgl code here
     lvgl_ui_function();
-
     s_lvgl_unlock();
     esp_rom_delay_us(100);
 
