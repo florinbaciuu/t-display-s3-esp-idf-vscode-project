@@ -30,10 +30,7 @@ set(
     esp_hw_support
     esp_wifi
     esp_lcd
-    esp-file-iterator
     fmt
-    esp_lcd_touch
-    esp_lcd_touch_xpt2046
     lvgl
     esp_lvgl_port
 )

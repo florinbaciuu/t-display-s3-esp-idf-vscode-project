@@ -1,10 +1,4 @@
 dependencies:
-  esp_lcd_touch:
-    dependencies: []
-    source:
-      path: /Users/florinbaciu/workspaces/esp-idf-vscode/T-Display-S3/T-Display-S3_lvgl_ESP-IDF_VSCode-Project/components/esp_lcd_touch
-      type: local
-    version: 1.1.2
   idf:
     source:
       type: idf
@@ -16,17 +10,9 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 9.3.0
-  tinyusb:
-    dependencies: []
-    source:
-      path: /Users/florinbaciu/workspaces/esp-idf-vscode/T-Display-S3/T-Display-S3_lvgl_ESP-IDF_VSCode-Project/components/tinyusb
-      type: local
-    version: 0.18.0~2
 direct_dependencies:
-- espressif/esp_lcd_touch
-- espressif/tinyusb
 - idf
 - lvgl/lvgl
-manifest_hash: 341454bbc3b1bcb0502551d8fbb3aabf0c39b3fcd7805d1b31ed0805670023c7
+manifest_hash: 1eb6ac775b55d1ccf909429afa823e37c7f4fddf8bcf708bbd1ea1b44336c7ef
 target: esp32s3
 version: 2.0.0
