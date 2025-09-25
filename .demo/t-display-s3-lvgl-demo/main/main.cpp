@@ -35,7 +35,7 @@
 #define LV_TICK_SOURCE_TASK     1
 #define LV_TICK_SOURCE_CALLBACK 2
 #ifndef LV_TICK_SOURCE
-#    define LV_TICK_SOURCE (LV_TICK_SOURCE_CALLBACK)
+#    define LV_TICK_SOURCE (LV_TICK_SOURCE_TASK)
 #endif /* #ifndef LV_TICK_SOURCE */
 //---------
 //---------
@@ -139,25 +139,33 @@ void gfx_set_backlight(uint32_t mode) {
 }
 //---------
 
+// #define LVGL_BENCH_TEST
+
+#ifdef LVGL_BENCH_TEST
+// --- stats flush (ISR-safe) ---
+volatile uint64_t g_flush_tstart_us = 0;
+volatile uint32_t g_flush_bytes     = 0;
+volatile uint32_t g_flush_last_us   = 0;
+volatile uint64_t g_flush_total_us  = 0;
+volatile uint32_t g_flush_count     = 0;
+
+// pentru log la 1s (din task, nu din ISR)
+static uint32_t g_log_last_tick = 0;
+
+#endif /* #if LVGL_BENCH_TEST */
+
 /**********************
- *   LVGL VARIABLES GLOBALE
+ *   LVGL VARIABLES
  **********************/
 uint32_t      bufSize;           // Dimensiunea buffer-ului
 lv_color_t*   disp_draw_buf;     // Buffer LVGL
 lv_color_t*   disp_draw_buf_II;  // Buffer LVGL secundar
 lv_display_t* disp;              // Display LVGL
 
-// ############  GLOBALE UI LVGL ########## //
-lv_obj_t* tabview = NULL;
-
-/**********************
- *   LVGL Prototypes
- **********************/
-void lvgl_ui_function(void);
-
 /**********************
  *   LVGL FUNCTIONS
  **********************/
+
 /* Display flushing function callback */
 void lv_disp_flush(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
 #ifdef LVGL_BENCH_TEST
@@ -172,15 +180,57 @@ void lv_disp_flush(lv_display_t* disp, const lv_area_t* area, uint8_t* px_map) {
 #endif /* #ifdef (flush_ready_in_disp_flush) */
 }
 //---------
+// ############  GLOBALE LVGL ##########//
+lv_obj_t* tabview = NULL;
+
+void lvgl_ui_function(void) {
+    // Creăm containerul de taburi
+    tabview = lv_tabview_create(lv_screen_active());
+    lv_tabview_set_tab_bar_size(tabview, 40);            // Setăm înălțimea tab-urilor
+    lv_obj_set_size(tabview, LV_PCT(100), LV_PCT(100));  // Setăm dimensiunea tabview-ului
+    lv_obj_set_flex_flow(tabview, LV_FLEX_FLOW_COLUMN);  // Setăm flex flow pentru tabview
+    lv_obj_set_flex_grow(tabview, 1);                    // Permitem tabview-ului să ocupe tot spațiul disponibil
+    lv_dir_t dir = LV_DIR_TOP;                           // Poziționăm tab-urile în partea de sus
+    lv_tabview_set_tab_bar_position(
+        tabview, dir);  // Funcția nu există în LVGL, deci comentăm această linie
+
+    /*Adăugăm 3 taburi*/
+    lv_obj_t* tab1 = lv_tabview_add_tab(tabview, "Tab 1");
+    lv_obj_t* tab2 = lv_tabview_add_tab(tabview, "Tab 2");
+    lv_obj_t* tab3 = lv_tabview_add_tab(tabview, "Tab 3");
+
+    // TAB 1
+
+    // TAB 2
+
+    // TAB 3
+}
 //---------
-#ifdef flush_ready_in_io_trans_done
+
+//---------
 bool panel_io_trans_done_callback(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t* edata, void* user_ctx) {
+    // old rau.
+    // if (disp != NULL) {
+    // } else {
+    //     esp_rom_printf("[lv_trans_done_cb] - disp este NULL!\n");
+    // }
+    // return false;  // false înseamnă: nu mai face nimic după
+#ifdef LVGL_BENCH_TEST
+    // calcule rapide, ISR-safe
+    uint32_t end_us     = (uint32_t) esp_timer_get_time();
+    uint32_t elapsed_us = end_us - (uint32_t) g_flush_tstart_us;
+
+    g_flush_last_us     = elapsed_us;
+    g_flush_total_us += elapsed_us;
+    g_flush_count++;
+#endif /* #ifdef LVGL_BENCH_TEST */
+#ifdef flush_ready_in_io_trans_done
     lv_display_t* d = (lv_display_t*) user_ctx;
     if (d)
-        lv_disp_flush_ready(d);
-    return false;
+        lv_disp_flush_ready(d);  // <— mutat aici
+#endif                           /* #ifdef (flush_ready_in_io_trans_done) */
+    return false;                // nu mai face nimic după
 }
-#endif /* #ifdef (flush_ready_in_io_trans_done) */
 //---------
 #if LV_TICK_SOURCE == LV_TICK_SOURCE_CALLBACK
 uint32_t lv_get_rtos_tick_count_callback(void) {
@@ -248,13 +298,12 @@ static void lv_tick_start_timer(void) {
 }
 
 void lv_main_task(void* parameter) {
-    xHandle_lv_main_task = xTaskGetCurrentTaskHandle();
-    TickType_t tick      = 0;
-    tick                 = xTaskGetTickCount();
+    xHandle_lv_main_task   = xTaskGetCurrentTaskHandle();
+    static TickType_t tick = 0;
+    tick                   = xTaskGetTickCount();
     while (true) {
         if (s_lvgl_lock(portMAX_DELAY)) {
             lv_timer_handler();
-            s_lvgl_unlock();
         }
         vTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));
     }
@@ -266,11 +315,11 @@ void lv_main_task(void* parameter) {
 /*                   TASK                       */
 /********************************************** */
 void lv_main_tick_task(void* parameter) {
-    TickType_t tick = 0;
-    tick            = xTaskGetTickCount();
+    static TickType_t tick = 0;
+    tick                   = xTaskGetTickCount();
     while (true) {
-        lv_tick_inc(TICK_INCREMENTATION);                 // Incrementeaza tick-urile LVGL in ms
-        xTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));  // Delay precis mult mai rapid asa
+        lv_tick_inc(TICK_INCREMENTATION);  // Incrementeaza tick-urile LVGL in ms
+        xTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY)); // Delay precis mult mai rapid asa
     }
 }
 
@@ -278,9 +327,9 @@ void lv_main_tick_task(void* parameter) {
 /*                   TASK                       */
 /********************************************** */
 void lv_main_task(void* parameter) {
-    xHandle_lv_main_task = xTaskGetCurrentTaskHandle();
-    TickType_t tick      = 0;
-    tick                 = xTaskGetTickCount();  // Inițializare corectă
+    xHandle_lv_main_task   = xTaskGetCurrentTaskHandle();
+    static TickType_t tick = 0;
+    tick                   = xTaskGetTickCount();  // Inițializare corectă
     while (true) {
         if (s_lvgl_lock(portMAX_DELAY)) {
             lv_timer_handler();
@@ -290,22 +339,6 @@ void lv_main_task(void* parameter) {
     }
 }
 
-#elif LV_TICK_SOURCE == LV_TICK_SOURCE_CALLBACK
-/********************************************** */
-/*                   TASK                       */
-/********************************************** */
-void lv_main_task(void* parameter) {
-    xHandle_lv_main_task = xTaskGetCurrentTaskHandle();
-    TickType_t tick      = 0;
-    tick                 = xTaskGetTickCount();  // Inițializare corectă
-    while (true) {
-        if (s_lvgl_lock(portMAX_DELAY)) {
-            lv_timer_handler();
-            s_lvgl_unlock();
-        }
-        xTaskDelayUntil(&tick, pdMS_TO_TICKS(LV_DELAY));  // delay doar aici
-    }
-}
 #endif /* #if LV_TICK_SOURCE == LV_TICK_SOURCE_TIMER */
 
 /********************************************** */
@@ -342,13 +375,14 @@ void chechButton0State(void* parameter) {
     static uint8_t current_tab = 0;
 
     while (true) {
-        xTaskNotifyWait(0x00, 0xFFFFFFFF, &notificationValue, portMAX_DELAY);  // asteapta notificarea din ISR
+        xTaskNotifyWait(0x00, 0xFFFFFFFF, &notificationValue, portMAX_DELAY); // asteapta notificarea din ISR
         if (notificationValue & 0x01) {
             ESP_LOGW("BUTTON", "Button ACTIVAT pe GPIO0");
 
             current_tab++;
             if (current_tab > 2)
                 current_tab = 0;
+
             // schimbă tab-ul LVGL
             if (s_lvgl_lock(30)) {  // protejează LVGL cu mutex-ul tău
                 lv_tabview_set_act(tabview, current_tab, LV_ANIM_ON);
@@ -359,7 +393,9 @@ void chechButton0State(void* parameter) {
     }
 }
 /****************************/
+
 //--------------------------------------
+
 /*
 ███    ███  █████  ██ ███    ██ 
 ████  ████ ██   ██ ██ ████   ██ 
@@ -540,17 +576,17 @@ extern "C" void app_main(void) {
     esp_rom_delay_us(100);
     s_lvgl_lock(0);
     // lvgl code here
-    lvgl_ui_function();  // lvgl ui
+    lvgl_ui_function();
     s_lvgl_unlock();
     esp_rom_delay_us(100);
 
-    xTaskCreatePinnedToCore(lv_main_task,    // Functia task-ului
-        (const char*) "LVGL Main Task",      // Numele task-ului
-        (uint32_t) (8192),            // Dimensiunea stack-ului
-        (NULL),                              // Parametri (daca exista)
-        (UBaseType_t) tskIDLE_PRIORITY + 5,  // Prioritatea task-ului // 3
-        &xHandle_lv_main_task,               // Handle-ul task-ului
-        ((1))                                // Nucleul pe care ruleaza task-ul
+    xTaskCreatePinnedToCore(lv_main_task,        // Functia task-ului
+        (const char*) "LVGL Main Task",          // Numele task-ului
+        (uint32_t) (4096 + 4096),                // Dimensiunea stack-ului
+        (NULL),                                  // Parametri (daca exista)
+        (UBaseType_t) configMAX_PRIORITIES - 4,  // Prioritatea task-ului // 3
+        &xHandle_lv_main_task,                   // Handle-ul task-ului
+        ((1))                                    // Nucleul pe care ruleaza task-ul
     );
 
 #if LV_TICK_SOURCE == LV_TICK_SOURCE_TIMER
@@ -558,9 +594,9 @@ extern "C" void app_main(void) {
 #elif LV_TICK_SOURCE == LV_TICK_SOURCE_TASK
     xTaskCreatePinnedToCore(lv_main_tick_task,   // Functia care ruleaza task-ul
         (const char*) "LVGL Tick Task",          // Numele task-ului
-        (uint32_t) (2048),                // Dimensiunea stack-ului
+        (uint32_t) (2048 + 1024),                // Dimensiunea stack-ului
         (NULL),                                  // Parametri
-        (UBaseType_t)(tskIDLE_PRIORITY + 1),  // Prioritatea task-ului // 1
+        (UBaseType_t) configMAX_PRIORITIES - 2,  // Prioritatea task-ului // 1
         &xHandle_lv_main_tick_task,              // Handle-ul task-ului
         ((1))                                    // Nucleul pe care ruleaza (ESP32 e dual-core)
     );
@@ -578,7 +614,7 @@ extern "C" void app_main(void) {
         (const char*) "v_check_0_pin_state",     // Numele task-ului
         (uint32_t) (4096),                       // Dimensiunea stack-ului
         (NULL),                                  // Parametri
-        (UBaseType_t) tskIDLE_PRIORITY + 5,  // Prioritatea task-ului // 6
+        (UBaseType_t) configMAX_PRIORITIES - 7,  // Prioritatea task-ului // 6
         &xHandle_chechButton0State,              // Handle-ul task-ului
         ((1))                                    // Nucleul pe care ruleaza (ESP32 e dual-core)
     );
@@ -586,35 +622,7 @@ extern "C" void app_main(void) {
     printf("T\n");
     esp_rom_delay_us(100);
     printf("Aici aplicatia ar trebui sa returneze.Meh\n");
-    esp_rom_delay_us(100);
+    vTaskDelay(100);
+    printf("Aici aplicatia ar trebui sa returneze.Meh\n");
+    printf("Si totusi am observat ca nu returneaza imediat .. ci mai astepata putin .\n");
 }
-// END MAIN
-
-// ############################################################## //
-
-/**********************
- *   LVGL UI FUNCTIONS
- **********************/
-void lvgl_ui_function(void) {
-    // Creăm containerul de taburi
-    tabview = lv_tabview_create(lv_screen_active());
-    lv_tabview_set_tab_bar_size(tabview, 40);            // Setăm înălțimea tab-urilor
-    lv_obj_set_size(tabview, LV_PCT(100), LV_PCT(100));  // Setăm dimensiunea tabview-ului
-    lv_obj_set_flex_flow(tabview, LV_FLEX_FLOW_COLUMN);  // Setăm flex flow pentru tabview
-    lv_obj_set_flex_grow(tabview, 1);                    // Permitem tabview-ului să ocupe tot spațiul disponibil
-    lv_dir_t dir = LV_DIR_TOP;                           // Poziționăm tab-urile în partea de sus
-    lv_tabview_set_tab_bar_position(
-        tabview, dir);  // Funcția nu există în LVGL, deci comentăm această linie
-
-    /*Adăugăm 3 taburi*/
-    lv_obj_t* tab1 = lv_tabview_add_tab(tabview, "Tab 1");
-    lv_obj_t* tab2 = lv_tabview_add_tab(tabview, "Tab 2");
-    lv_obj_t* tab3 = lv_tabview_add_tab(tabview, "Tab 3");
-
-    // TAB 1
-
-    // TAB 2
-
-    // TAB 3
-}
-//---------
